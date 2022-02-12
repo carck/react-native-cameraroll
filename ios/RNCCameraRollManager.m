@@ -219,6 +219,7 @@ RCT_EXPORT_METHOD(getAlbums:(NSDictionary *)params
   NSString *const mediaType = [params objectForKey:@"assetType"] ? [RCTConvert NSString:params[@"assetType"]] : @"All";
   NSString *const albumType = [params objectForKey:@"albumType"] ? [RCTConvert NSString:params[@"albumType"]] : @"Album";
 
+  NSMutableArray * result = [NSMutableArray new];
   NSString *__block fetchedAlbumType = nil;
   void (^convertAsset)(PHAssetCollection * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) =
     ^(PHAssetCollection * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
