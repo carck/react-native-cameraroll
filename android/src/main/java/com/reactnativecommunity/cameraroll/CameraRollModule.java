@@ -522,6 +522,7 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
       Set<String> include) {
     WritableArray edges = new WritableNativeArray();
     media.moveToFirst();
+    int imageIdIndex = media.getColumnIndex(Images.Media._ID);
     int mimeTypeIndex = media.getColumnIndex(Images.Media.MIME_TYPE);
     int groupNameIndex = media.getColumnIndex(Images.Media.BUCKET_DISPLAY_NAME);
     int dateTakenIndex = media.getColumnIndex(Images.Media.DATE_TAKEN);
@@ -543,7 +544,7 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
       WritableMap node = new WritableNativeMap();
       boolean imageInfoSuccess =
           putImageInfo(resolver, media, node, widthIndex, heightIndex, sizeIndex, dataIndex,
-              mimeTypeIndex, includeFilename, includeFileSize, includeImageSize,
+              mimeTypeIndex, imageIdIndex, includeFilename, includeFileSize, includeImageSize,
               includePlayableDuration);
       if (imageInfoSuccess) {
         putBasicNodeInfo(media, node, mimeTypeIndex, groupNameIndex, dateTakenIndex, dateAddedIndex, dateModifiedIndex);
@@ -593,11 +594,13 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
       int sizeIndex,
       int dataIndex,
       int mimeTypeIndex,
+      int imageIdIndex,
       boolean includeFilename,
       boolean includeFileSize,
       boolean includeImageSize,
       boolean includePlayableDuration) {
     WritableMap image = new WritableNativeMap();
+    image.putString("id", String.valueOf(media.getLong(imageIdIndex)));
     Uri photoUri = Uri.parse("file://" + media.getString(dataIndex));
     image.putString("uri", photoUri.toString());
     String mimeType = media.getString(mimeTypeIndex);
