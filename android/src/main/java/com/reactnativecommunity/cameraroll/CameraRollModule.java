@@ -427,12 +427,26 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
   }
 
   public String getBucketName(int bucketId) {
-    Cursor media = getReactApplicationContext().getContentResolver().query(
-            MediaStore.Files.getContentUri("external"),
-            new String[]{Images.Media.BUCKET_DISPLAY_NAME},
-            String.format("%s = %s", Images.Media.BUCKET_ID, bucketId),
-            null,
-            null);
+    Cursor media;
+    String filter = String.format("%s = %s", Images.Media.BUCKET_ID, bucketId);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      Bundle bundle = new Bundle();
+      bundle.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, filter);
+      bundle.putInt(ContentResolver.QUERY_ARG_LIMIT, 1);
+      media = getReactApplicationContext().getContentResolver().query(
+              MediaStore.Files.getContentUri("external"),
+              new String[]{Images.Media.BUCKET_DISPLAY_NAME},
+              filter,
+              null,
+              null);
+    } else {
+      media = getReactApplicationContext().getContentResolver().query(
+              MediaStore.Files.getContentUri("external").buildUpon().encodedQuery("limit=1").build(),
+              new String[]{Images.Media.BUCKET_DISPLAY_NAME},
+              filter,
+              null,
+              null);
+    }
     if (media.moveToFirst()) {
       return media.getString(0);
     }
@@ -858,9 +872,9 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
       String[] projection = { MediaStore.Images.Media._ID };
 
       // Match on the file path
-      String innerWhere = "?";
+      StringBuilder innerWhere = new StringBuilder("?");
       for (int i = 1; i < mUris.size(); i++) {
-        innerWhere += ", ?";
+        innerWhere.append(", ?");
       }
 
       String selection = MediaStore.Images.Media.DATA + " IN (" + innerWhere + ")";
