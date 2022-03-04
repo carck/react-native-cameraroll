@@ -95,9 +95,6 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
     MediaStore.MediaColumns.DATA
   };
 
-  private static final String SELECTION_BUCKET = Images.Media.BUCKET_DISPLAY_NAME + " = ?";
-  private static final String SELECTION_DATE_TAKEN = Images.Media.DATE_TAKEN + " < ?";
-
   public CameraRollModule(ReactApplicationContext reactContext) {
     super(reactContext);
   }
@@ -252,7 +249,7 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
   public void getPhotos(final ReadableMap params, final Promise promise) {
     int first = params.getInt("first");
     String after = params.hasKey("after") ? params.getString("after") : null;
-    String groupName = params.hasKey("groupName") ? params.getString("groupName") : null;
+    Integer groupName = params.hasKey("groupName") ? params.getInt("groupName") : null;
     String assetType = params.hasKey("assetType") ? params.getString("assetType") : ASSET_TYPE_PHOTOS;
     long fromTime = params.hasKey("fromTime") ? (long) params.getDouble("fromTime") : 0;
     long toTime = params.hasKey("toTime") ? (long) params.getDouble("toTime") : 0;
@@ -279,7 +276,7 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
     private final Context mContext;
     private final int mFirst;
     private final @Nullable String mAfter;
-    private final @Nullable String mGroupName;
+    private final @Nullable Integer mGroupName;
     private final @Nullable ReadableArray mMimeTypes;
     private final Promise mPromise;
     private final String mAssetType;
@@ -291,7 +288,7 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
         ReactContext context,
         int first,
         @Nullable String after,
-        @Nullable String groupName,
+        @Nullable Integer groupName,
         @Nullable ReadableArray mimeTypes,
         String assetType,
         long fromTime,
@@ -332,9 +329,9 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
     protected void doInBackgroundGuarded(Void... params) {
       StringBuilder selection = new StringBuilder("1");
       List<String> selectionArgs = new ArrayList<>();
-      if (!TextUtils.isEmpty(mGroupName)) {
-        selection.append(" AND " + SELECTION_BUCKET);
-        selectionArgs.add(mGroupName);
+      if (mGroupName != null) {
+        selection.append(" AND " + Images.Media.BUCKET_ID + " = ?");
+        selectionArgs.add(mGroupName.toString());
       }
 
       if (mAssetType.equals(ASSET_TYPE_PHOTOS)) {
@@ -429,11 +426,25 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
     }
   }
 
+  public String getBucketName(int bucketId) {
+    Cursor media = getReactApplicationContext().getContentResolver().query(
+            MediaStore.Files.getContentUri("external"),
+            new String[]{Images.Media.BUCKET_DISPLAY_NAME},
+            String.format("%s = %s", Images.Media.BUCKET_ID, bucketId),
+            null,
+            null);
+    if (media.moveToFirst()) {
+      return media.getString(0);
+    }
+    return null;
+  }
+
   @ReactMethod
   public void getAlbums(final ReadableMap params, final Promise promise) {
     String assetType = params.hasKey("assetType") ? params.getString("assetType") : ASSET_TYPE_ALL;
-    StringBuilder selection = new StringBuilder("1");
-    List<String> selectionArgs = new ArrayList<>();
+    StringBuilder selection = new StringBuilder();
+    selection.append(Images.ImageColumns.BUCKET_ID + " IS NOT NULL");
+    selection.append(" AND " + Images.ImageColumns.BUCKET_DISPLAY_NAME + " IS NOT NULL");
     if (assetType.equals(ASSET_TYPE_PHOTOS)) {
       selection.append(" AND " + MediaStore.Files.FileColumns.MEDIA_TYPE + " = "
               + MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE);
@@ -453,14 +464,12 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
       return;
     }
 
-    final String[] projection = {MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME};
-
     try {
       Cursor media = getReactApplicationContext().getContentResolver().query(
               MediaStore.Files.getContentUri("external"),
-              projection,
+              new String[]{Images.ImageColumns.BUCKET_ID},
               selection.toString(),
-              selectionArgs.toArray(new String[selectionArgs.size()]),
+              null,
               null);
       if (media == null) {
         promise.reject(ERROR_UNABLE_TO_LOAD, "Could not get media");
@@ -468,26 +477,23 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
         WritableArray response = new WritableNativeArray();
         try {
           if (media.moveToFirst()) {
-            Map<String, Integer> albums = new HashMap<>();
+            Map<Integer, Integer> albums = new HashMap<>();
             do {
-              int column = media.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME);
-              if ( column < 0 ) {
-                throw new IndexOutOfBoundsException();
-              }
-              String albumName = media.getString(column);
-              if (albumName != null) {
-                Integer albumCount = albums.get(albumName);
+              int albumId = media.getInt(0);
+              if (albumId != 0) {
+                Integer albumCount = albums.get(albumId);
                 if (albumCount == null) {
-                  albums.put(albumName, 1);
+                  albums.put(albumId, 1);
                 } else {
-                  albums.put(albumName, albumCount + 1);
+                  albums.put(albumId, albumCount + 1);
                 }
               }
             } while (media.moveToNext());
 
-            for (Map.Entry<String, Integer> albumEntry : albums.entrySet()) {
+            for (Map.Entry<Integer, Integer> albumEntry : albums.entrySet()) {
               WritableMap album = new WritableNativeMap();
-              album.putString("title", albumEntry.getKey());
+              album.putInt("id", albumEntry.getKey());
+              album.putString("title", getBucketName(albumEntry.getKey()));
               album.putInt("count", albumEntry.getValue());
               response.pushMap(album);
             }
