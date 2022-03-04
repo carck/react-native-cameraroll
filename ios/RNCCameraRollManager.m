@@ -414,13 +414,13 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
       }];
     };
 
-    if ([groupTypes isEqualToString:@"all"]) {
+    if (groupName == nil) {
       PHFetchResult <PHAsset *> *const assetFetchResult = [PHAsset fetchAssetsWithOptions: assetFetchOptions];
       currentCollectionName = @"All Photos";
       [assetFetchResult enumerateObjectsUsingBlock:collectAsset];
     } else {
       PHFetchResult<PHAssetCollection *> * assetCollectionFetchResult;
-      if ([groupTypes isEqualToString:@"smartalbum"]) {
+      if ([groupTypes isEqualToString:@"smartalbum"] || [groupTypes isEqualToString:@"all"]) {
         assetCollectionFetchResult = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeSmartAlbum subtype:PHAssetCollectionSubtypeAny options:nil];
         [assetCollectionFetchResult enumerateObjectsUsingBlock:^(PHAssetCollection * _Nonnull assetCollection, NSUInteger collectionIdx, BOOL * _Nonnull stopCollections) {
           if ([assetCollection.localizedTitle isEqualToString:groupName]) {
@@ -430,24 +430,23 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
           }
           *stopCollections = stopCollections_;
         }];
-      } else {
-        PHAssetCollectionSubtype const collectionSubtype = [RCTConvert PHAssetCollectionSubtype:groupTypes];
-
-        // Filter collection name ("group")
-        PHFetchOptions *const collectionFetchOptions = [PHFetchOptions new];
-        collectionFetchOptions.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"endDate" ascending:NO]];
-        if (groupName != nil) {
-          collectionFetchOptions.predicate = [NSPredicate predicateWithFormat:@"localizedTitle = %@", groupName];
-        }
-        assetCollectionFetchResult = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum subtype:collectionSubtype options:collectionFetchOptions];
-        [assetCollectionFetchResult enumerateObjectsUsingBlock:^(PHAssetCollection * _Nonnull assetCollection, NSUInteger collectionIdx, BOOL * _Nonnull stopCollections) {
-            // Enumerate assets within the collection
-          PHFetchResult<PHAsset *> *const assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:assetCollection options:assetFetchOptions];
-          currentCollectionName = [assetCollection localizedTitle];
-          [assetsFetchResult enumerateObjectsUsingBlock:collectAsset];
-          *stopCollections = stopCollections_;
-        }];
       }
+
+      PHAssetCollectionSubtype const collectionSubtype = [RCTConvert PHAssetCollectionSubtype:groupTypes];
+      // Filter collection name ("group")
+      PHFetchOptions *const collectionFetchOptions = [PHFetchOptions new];
+      collectionFetchOptions.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"endDate" ascending:NO]];
+      if (groupName != nil) {
+        collectionFetchOptions.predicate = [NSPredicate predicateWithFormat:@"localizedTitle = %@", groupName];
+      }
+      assetCollectionFetchResult = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum subtype:collectionSubtype options:collectionFetchOptions];
+      [assetCollectionFetchResult enumerateObjectsUsingBlock:^(PHAssetCollection * _Nonnull assetCollection, NSUInteger collectionIdx, BOOL * _Nonnull stopCollections) {
+          // Enumerate assets within the collection
+        PHFetchResult<PHAsset *> *const assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:assetCollection options:assetFetchOptions];
+        currentCollectionName = [assetCollection localizedTitle];
+        [assetsFetchResult enumerateObjectsUsingBlock:collectAsset];
+        *stopCollections = stopCollections_;
+      }];
     }
 
     // If we get this far and haven't resolved the promise yet, we reached the end of the list of photos
