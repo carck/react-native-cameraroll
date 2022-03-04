@@ -228,6 +228,7 @@ RCT_EXPORT_METHOD(getAlbums:(NSDictionary *)params
       PHFetchResult<PHAsset *> *const assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:obj options:assetFetchOptions];
       if (assetsFetchResult.count > 0) {
         [result addObject:@{
+          @"id": [obj localIdentifier],
           @"title": [obj localizedTitle],
           @"count": @(assetsFetchResult.count),
           @"type": fetchedAlbumType
@@ -284,7 +285,6 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
   NSUInteger const first = [RCTConvert NSInteger:params[@"first"]];
   NSString *const afterCursor = [RCTConvert NSString:params[@"after"]];
   NSString *const groupName = [RCTConvert NSString:params[@"groupName"]];
-  NSString *const groupTypes = [[RCTConvert NSString:params[@"groupTypes"]] lowercaseString];
   NSString *const mediaType = [RCTConvert NSString:params[@"assetType"]];
   NSUInteger const fromTime = [RCTConvert NSInteger:params[@"fromTime"]];
   NSUInteger const toTime = [RCTConvert NSInteger:params[@"toTime"]];
@@ -318,7 +318,6 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
   BOOL __block resolvedPromise = NO;
   NSMutableArray<NSDictionary<NSString *, id> *> *assets = [NSMutableArray new];
 
-  BOOL __block stopCollections_;
   NSString __block *currentCollectionName;
 
   requestPhotoLibraryAccess(reject, ^(bool isLimited){
@@ -371,7 +370,6 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
       // If we've accumulated enough results to resolve a single promise
       if (first == assets.count) {
         *stopAssets = YES;
-        stopCollections_ = YES;
         hasNextPage = YES;
         RCTAssert(resolvedPromise == NO, @"Resolved the promise before we finished processing the results.");
         RCTResolvePromise(resolve, assets, hasNextPage, isLimited);
@@ -393,6 +391,7 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
           @"type": assetMediaTypeLabel, // TODO: switch to mimeType?
           @"group_name": currentCollectionName,
           @"image": @{
+              @"id": asset.localIdentifier,
               @"uri": uri,
               @"filename": (includeFilename && originalFilename ? originalFilename : [NSNull null]),
               @"height": (includeImageSize ? @([asset pixelHeight]) : [NSNull null]),
@@ -419,34 +418,19 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
       currentCollectionName = @"All Photos";
       [assetFetchResult enumerateObjectsUsingBlock:collectAsset];
     } else {
-      PHFetchResult<PHAssetCollection *> * assetCollectionFetchResult;
-      if ([groupTypes isEqualToString:@"smartalbum"] || [groupTypes isEqualToString:@"all"]) {
-        assetCollectionFetchResult = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeSmartAlbum subtype:PHAssetCollectionSubtypeAny options:nil];
-        [assetCollectionFetchResult enumerateObjectsUsingBlock:^(PHAssetCollection * _Nonnull assetCollection, NSUInteger collectionIdx, BOOL * _Nonnull stopCollections) {
-          if ([assetCollection.localizedTitle isEqualToString:groupName]) {
-            PHFetchResult<PHAsset *> *const assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:assetCollection options:assetFetchOptions];
-            currentCollectionName = [assetCollection localizedTitle];
-            [assetsFetchResult enumerateObjectsUsingBlock:collectAsset];
-          }
-          *stopCollections = stopCollections_;
-        }];
-      }
+      PHFetchOptions *options = [PHFetchOptions new];
+      options.fetchLimit = 1;
+      PHAssetCollection *assetCollection = [PHAssetCollection fetchAssetCollectionsWithLocalIdentifiers:@[groupName] options:options].firstObject;
 
-      PHAssetCollectionSubtype const collectionSubtype = [RCTConvert PHAssetCollectionSubtype:groupTypes];
-      // Filter collection name ("group")
-      PHFetchOptions *const collectionFetchOptions = [PHFetchOptions new];
-      collectionFetchOptions.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"endDate" ascending:NO]];
-      if (groupName != nil) {
-        collectionFetchOptions.predicate = [NSPredicate predicateWithFormat:@"localizedTitle = %@", groupName];
+      if (!assetCollection) {
+        reject(@"E_ALBUM_NOT_FOUND", @"Couldn't find album", nil);
+        return;
       }
-      assetCollectionFetchResult = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum subtype:collectionSubtype options:collectionFetchOptions];
-      [assetCollectionFetchResult enumerateObjectsUsingBlock:^(PHAssetCollection * _Nonnull assetCollection, NSUInteger collectionIdx, BOOL * _Nonnull stopCollections) {
-          // Enumerate assets within the collection
-        PHFetchResult<PHAsset *> *const assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:assetCollection options:assetFetchOptions];
-        currentCollectionName = [assetCollection localizedTitle];
-        [assetsFetchResult enumerateObjectsUsingBlock:collectAsset];
-        *stopCollections = stopCollections_;
-      }];
+      
+      // Enumerate assets within the collection
+      PHFetchResult<PHAsset *> *const assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:assetCollection options:assetFetchOptions];
+      currentCollectionName = [assetCollection localizedTitle];
+      [assetsFetchResult enumerateObjectsUsingBlock:collectAsset];
     }
 
     // If we get this far and haven't resolved the promise yet, we reached the end of the list of photos
