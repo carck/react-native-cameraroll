@@ -401,7 +401,7 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
       PHAsset *asset = [assetsFetchResult objectAtIndex:i];
       collectAsset(asset);
     }
-    BOOL hasNextPage = endIndex < totalCount - 1;
+    BOOL hasNextPage = endIndex <= totalCount - 1;
 
     RCTResolvePromise(resolve, assets, hasNextPage, isLimited);
   });
