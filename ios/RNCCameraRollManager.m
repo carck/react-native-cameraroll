@@ -268,12 +268,21 @@ static void RCTResolvePromise(RCTPromiseResolveBlock resolve,
   resolve(@{
     @"edges": assets,
     @"page_info": @{
-      @"start_cursor": assets[0][@"node"][@"image"][@"uri"],
-      @"end_cursor": assets[assets.count - 1][@"node"][@"image"][@"uri"],
+      @"start_cursor": assets[0][@"node"][@"image"][@"id"],
+      @"end_cursor": assets[assets.count - 1][@"node"][@"image"][@"id"],
       @"has_next_page": @(hasNextPage),
     },
     @"limited": @(isLimited)
   });
+}
+
++ (PHAsset *)getAssetById:(NSString *)assetId
+{
+  PHFetchOptions *options = [PHFetchOptions new];
+  options.includeHiddenAssets = YES;
+  options.includeAllBurstAssets = YES;
+  options.fetchLimit = 1;
+  return [PHAsset fetchAssetsWithLocalIdentifiers:@[assetId] options:options].firstObject;
 }
 
 RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
@@ -288,7 +297,6 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
   NSString *const mediaType = [RCTConvert NSString:params[@"assetType"]];
   NSUInteger const fromTime = [RCTConvert NSInteger:params[@"fromTime"]];
   NSUInteger const toTime = [RCTConvert NSInteger:params[@"toTime"]];
-  NSArray<NSString *> *const mimeTypes = [RCTConvert NSStringArray:params[@"mimeTypes"]];
   NSArray<NSString *> *const include = [RCTConvert NSStringArray:params[@"include"]];
 
   BOOL __block includeFilename = [include indexOfObject:@"filename"] != NSNotFound;
@@ -299,82 +307,25 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
 
   // Predicate for fetching assets within a collection
   PHFetchOptions *const assetFetchOptions = [RCTConvert PHFetchOptionsFromMediaType:mediaType fromTime:fromTime toTime:toTime];
-  // We can directly set the limit if we guarantee every image fetched will be
-  // added to the output array within the `collectAsset` block
-  BOOL collectAssetMayOmitAsset = !!afterCursor || [mimeTypes count] > 0;
-  if (!collectAssetMayOmitAsset) {
-    // We set the fetchLimit to first + 1 so that `hasNextPage` will be set
-    // correctly:
-    // - If the user set `first: 10` and there are 11 photos, `hasNextPage`
-    //   will be set to true below inside of `collectAsset`
-    // - If the user set `first: 10` and there are 10 photos, `hasNextPage`
-    //   will not be set, as expected
-    assetFetchOptions.fetchLimit = first + 1;
-  }
   assetFetchOptions.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending:NO]];
 
-  BOOL __block foundAfter = NO;
-  BOOL __block hasNextPage = NO;
-  BOOL __block resolvedPromise = NO;
   NSMutableArray<NSDictionary<NSString *, id> *> *assets = [NSMutableArray new];
 
   NSString __block *currentCollectionName;
 
   requestPhotoLibraryAccess(reject, ^(bool isLimited){
-    void (^collectAsset)(PHAsset*, NSUInteger, BOOL*) = ^(PHAsset * _Nonnull asset, NSUInteger assetIdx, BOOL * _Nonnull stopAssets) {
-      NSString *const uri = [NSString stringWithFormat:@"ph://%@", [asset localIdentifier]];
+    void (^collectAsset)(PHAsset*) = ^(PHAsset * _Nonnull asset) {
       NSString *_Nullable originalFilename = NULL;
       PHAssetResource *_Nullable resource = NULL;
       NSNumber* fileSize = [NSNumber numberWithInt:0];
 
-      if (includeFilename || includeFileSize || [mimeTypes count] > 0) {
+      if (includeFilename || includeFileSize) {
         // Get underlying resources of an asset - this includes files as well as details about edited PHAssets
         // This is required for the filename and mimeType filtering
         NSArray<PHAssetResource *> *const assetResources = [PHAssetResource assetResourcesForAsset:asset];
         resource = [assetResources firstObject];
         originalFilename = resource.originalFilename;
         fileSize = [resource valueForKey:@"fileSize"];
-      }
-
-      // WARNING: If you add any code to `collectAsset` that may skip adding an
-      // asset to the `assets` output array, you should do it inside this
-      // block and ensure the logic for `collectAssetMayOmitAsset` above is
-      // updated
-      if (collectAssetMayOmitAsset) {
-        if (afterCursor && !foundAfter) {
-          if ([afterCursor isEqualToString:uri]) {
-            foundAfter = YES;
-          }
-          return; // skip until we get to the first one
-        }
-
-
-        if ([mimeTypes count] > 0 && resource) {
-          CFStringRef const uti = (__bridge CFStringRef _Nonnull)(resource.uniformTypeIdentifier);
-          NSString *const mimeType = (NSString *)CFBridgingRelease(UTTypeCopyPreferredTagWithClass(uti, kUTTagClassMIMEType));
-
-          BOOL __block mimeTypeFound = NO;
-          [mimeTypes enumerateObjectsUsingBlock:^(NSString * _Nonnull mimeTypeFilter, NSUInteger idx, BOOL * _Nonnull stop) {
-            if ([mimeType isEqualToString:mimeTypeFilter]) {
-              mimeTypeFound = YES;
-              *stop = YES;
-            }
-          }];
-
-          if (!mimeTypeFound) {
-            return;
-          }
-        }
-      }
-
-      // If we've accumulated enough results to resolve a single promise
-      if (first == assets.count) {
-        *stopAssets = YES;
-        hasNextPage = YES;
-        RCTAssert(resolvedPromise == NO, @"Resolved the promise before we finished processing the results.");
-        RCTResolvePromise(resolve, assets, hasNextPage, isLimited);
-        resolvedPromise = YES;
-        return;
       }
 
       NSString *const assetMediaTypeLabel = (asset.mediaType == PHAssetMediaTypeVideo
@@ -392,7 +343,7 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
           @"group_name": currentCollectionName,
           @"image": @{
               @"id": asset.localIdentifier,
-              @"uri": uri,
+              @"uri": [NSString stringWithFormat:@"ph://%@", [asset localIdentifier]],
               @"filename": (includeFilename && originalFilename ? originalFilename : [NSNull null]),
               @"height": (includeImageSize ? @([asset pixelHeight]) : [NSNull null]),
               @"width": (includeImageSize ? @([asset pixelWidth]) : [NSNull null]),
@@ -413,10 +364,18 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
       }];
     };
 
+    PHAsset *cursor;
+    if(afterCursor){
+      cursor = [RNCCameraRollManager getAssetById: afterCursor];
+      if (!cursor) {
+        reject(@"E_CURSOR_NOT_FOUND", @"Couldn't find cursor", nil);
+        return;
+      }
+    }
+    PHFetchResult *assetsFetchResult;
     if (groupName == nil) {
-      PHFetchResult <PHAsset *> *const assetFetchResult = [PHAsset fetchAssetsWithOptions: assetFetchOptions];
+      assetsFetchResult = [PHAsset fetchAssetsWithOptions: assetFetchOptions];
       currentCollectionName = @"All Photos";
-      [assetFetchResult enumerateObjectsUsingBlock:collectAsset];
     } else {
       PHFetchOptions *options = [PHFetchOptions new];
       options.fetchLimit = 1;
@@ -428,17 +387,23 @@ RCT_EXPORT_METHOD(getPhotos:(NSDictionary *)params
       }
       
       // Enumerate assets within the collection
-      PHFetchResult<PHAsset *> *const assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:assetCollection options:assetFetchOptions];
+      assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:assetCollection options:assetFetchOptions];
       currentCollectionName = [assetCollection localizedTitle];
-      [assetsFetchResult enumerateObjectsUsingBlock:collectAsset];
     }
+    
+    NSInteger cursorIndex = cursor ? [assetsFetchResult indexOfObject:cursor] : NSNotFound;
+    NSInteger totalCount = assetsFetchResult.count;
+    
+    NSInteger startIndex = cursorIndex == NSNotFound ? 0 : cursorIndex + 1;
+    NSInteger endIndex = MIN(startIndex + first, totalCount);
+        
+    for (NSInteger i = startIndex; i < endIndex; i++) {
+      PHAsset *asset = [assetsFetchResult objectAtIndex:i];
+      collectAsset(asset);
+    }
+    BOOL hasNextPage = endIndex < totalCount - 1;
 
-    // If we get this far and haven't resolved the promise yet, we reached the end of the list of photos
-    if (!resolvedPromise) {
-      hasNextPage = NO;
-      RCTResolvePromise(resolve, assets, hasNextPage, isLimited);
-      resolvedPromise = YES;
-    }
+    RCTResolvePromise(resolve, assets, hasNextPage, isLimited);
   });
 }
 
@@ -446,15 +411,9 @@ RCT_EXPORT_METHOD(deletePhotos:(NSArray<NSString *>*)assets
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 {
-  NSMutableArray *convertedAssets = [NSMutableArray array];
-
-  for (NSString *asset in assets) {
-    [convertedAssets addObject: [asset stringByReplacingOccurrencesOfString:@"ph://" withString:@""]];
-  }
-
   [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
       PHFetchResult<PHAsset *> *fetched =
-        [PHAsset fetchAssetsWithLocalIdentifiers:convertedAssets options:nil];
+        [PHAsset fetchAssetsWithLocalIdentifiers:assets options:nil];
       [PHAssetChangeRequest deleteAssets:fetched];
     }
   completionHandler:^(BOOL success, NSError *error) {
