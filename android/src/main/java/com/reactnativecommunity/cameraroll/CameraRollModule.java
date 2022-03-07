@@ -7,9 +7,12 @@
 
 package com.reactnativecommunity.cameraroll;
 
+import android.app.Activity;
+import android.app.PendingIntent;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.graphics.BitmapFactory;
@@ -26,6 +29,7 @@ import android.text.TextUtils;
 import android.media.ExifInterface;
 
 import com.facebook.common.logging.FLog;
+import com.facebook.react.bridge.BaseActivityEventListener;
 import com.facebook.react.bridge.GuardedAsyncTask;
 import com.facebook.react.bridge.NativeModule;
 import com.facebook.react.bridge.Promise;
@@ -824,29 +828,30 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
   /**
    * Delete a set of images.
    *
-   * @param uris array of file:// URIs of the images to delete
+   * @param ids     array of the images to delete
    * @param promise to be resolved
    */
   @ReactMethod
-  public void deletePhotos(ReadableArray uris, Promise promise) {
-    if (uris.size() == 0) {
+  public void deletePhotos(ReadableArray ids, Promise promise) {
+    if (ids.size() == 0) {
       promise.reject(ERROR_UNABLE_TO_DELETE, "Need at least one URI to delete");
     } else {
-      new DeletePhotos(getReactApplicationContext(), uris, promise)
-          .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+      new DeletePhotos(getReactApplicationContext(), ids, promise)
+              .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
   }
 
   private static class DeletePhotos extends GuardedAsyncTask<Void, Void> {
 
-    private final Context mContext;
-    private final ReadableArray mUris;
+    private static final int EDIT_REQUEST_CODE = 10000;
+    private final ReactApplicationContext mContext;
+    private final ReadableArray mIds;
     private final Promise mPromise;
 
-    public DeletePhotos(ReactContext context, ReadableArray uris, Promise promise) {
+    public DeletePhotos(ReactApplicationContext context, ReadableArray ids, Promise promise) {
       super(context);
       mContext = context;
-      mUris = uris;
+      mIds = ids;
       mPromise = promise;
     }
 
@@ -854,45 +859,59 @@ public class CameraRollModule extends ReactContextBaseJavaModule {
     protected void doInBackgroundGuarded(Void... params) {
       ContentResolver resolver = mContext.getContentResolver();
 
-      // Set up the projection (we only need the ID)
-      String[] projection = { MediaStore.Images.Media._ID };
-
-      // Match on the file path
-      StringBuilder innerWhere = new StringBuilder("?");
-      for (int i = 1; i < mUris.size(); i++) {
-        innerWhere.append(", ?");
-      }
-
-      String selection = MediaStore.Images.Media.DATA + " IN (" + innerWhere + ")";
-      // Query for the ID of the media matching the file path
-      Uri queryUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-
-      String[] selectionArgs = new String[mUris.size()];
-      for (int i = 0; i < mUris.size(); i++) {
-        Uri uri = Uri.parse(mUris.getString(i));
-        selectionArgs[i] = uri.getPath();
-      }
-
-      Cursor cursor = resolver.query(queryUri, projection, selection, selectionArgs, null);
       int deletedCount = 0;
 
-      while (cursor.moveToNext()) {
-        long id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID));
-        Uri deleteUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
-
-        if (resolver.delete(deleteUri, null, null) == 1) {
-          deletedCount++;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        List<Uri> urisToModify = new ArrayList<>();
+        for (int i = 0; i < mIds.size(); i++) {
+          urisToModify.add(getContentUri(i));
+        }
+        mContext.addActivityEventListener(new BaseActivityEventListener() {
+          @Override
+          public void onActivityResult(Activity activity, int requestCode, int resultCode, Intent data) {
+            if (requestCode == EDIT_REQUEST_CODE) {
+              mContext.removeActivityEventListener(this);
+            }
+            if (resultCode == Activity.RESULT_OK) {
+              mPromise.resolve(true);
+            } else {
+              mPromise.reject(ERROR_UNABLE_TO_DELETE,
+                      "Could not delete all media, user rejected");
+            }
+          }
+        });
+        PendingIntent pendingIntent = MediaStore.createTrashRequest(resolver, urisToModify, true);
+        try {
+          mContext.getCurrentActivity()
+                  .startIntentSenderForResult(pendingIntent.getIntentSender(),
+                          EDIT_REQUEST_CODE,
+                          null, 0, 0, 0);
+        } catch (Exception e) {
+          mPromise.reject(ERROR_UNABLE_TO_DELETE,
+                  "Could not delete all media, only deleted " + e.toString() + " photos.");
+        }
+      } else {
+        for (int i = 0; i < mIds.size(); i++) {
+          if (resolver.delete(getContentUri(i), null, null) == 1) {
+            deletedCount++;
+          }
+        }
+        if (deletedCount == mIds.size()) {
+          mPromise.resolve(true);
+        } else {
+          mPromise.reject(ERROR_UNABLE_TO_DELETE,
+                  "Could not delete all media, only deleted " + deletedCount + " photos.");
         }
       }
+    }
 
-      cursor.close();
-
-      if (deletedCount == mUris.size()) {
-        mPromise.resolve(true);
-      } else {
-        mPromise.reject(ERROR_UNABLE_TO_DELETE,
-            "Could not delete all media, only deleted " + deletedCount + " photos.");
-      }
+    private Uri getContentUri(int i) {
+      String[] m = mIds.getString(i).split(":");
+      String id = m.length > 1 ? m[1] : m[0];
+      boolean isVideo = m.length > 1 && "1".equals(m[0]);
+      return isVideo
+              ? ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, Integer.parseInt(id))
+              : ContentUris.withAppendedId(Images.Media.EXTERNAL_CONTENT_URI, Integer.parseInt(id));
     }
   }
 }
